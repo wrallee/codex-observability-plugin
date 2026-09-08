@@ -1,6 +1,6 @@
 {
   "name": "@langfuse/codex-observability-plugin",
-  "version": "0.3.0-W002",
+  "version": "0.3.0-W003",
   "description": "Langfuse observability plugin for the OpenAI Codex coding agent for tracing prompts, agent turns, model generations, and tool calls.",
   "license": "MIT",
   "author": "Langfuse",

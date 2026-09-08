@@ -46843,6 +46843,9 @@ function parseSession(lines) {
 					const t = ensureTurn(ts);
 					if (!t.userInput) t.userInput = text;
 				}
+			} else if (et === "item_completed" && p.item?.type === "SubAgentActivity" && p.item.kind === "started" && typeof p.item.agent_thread_id === "string") {
+				ensureTurn(ts);
+				recordSubagentThread(p.item.agent_thread_id);
 			} else if (et === "agent_message" && typeof p.message === "string") ensureTurn(ts).lastAgentMessage = p.message;
 			else if (et === "token_count") {
 				if (!turn) continue;

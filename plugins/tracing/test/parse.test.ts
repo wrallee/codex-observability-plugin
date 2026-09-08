@@ -229,6 +229,90 @@ describe("parseSession", () => {
     expect(turns[0].subagentThreadIds).toEqual(["thread-a"]);
   });
 
+  it("records subagent threads from completed SubAgentActivity items", () => {
+    const event = (ts: string, payload: Record<string, unknown>): RolloutLine => ({
+      timestamp: ts,
+      type: "event_msg",
+      payload: { ...payload },
+    });
+    const activityItem = (kind: string, agentThreadId: string) => ({
+      type: "SubAgentActivity",
+      event_id: `event-${kind}-${agentThreadId}`,
+      agent_thread_id: agentThreadId,
+      agent_path: "/root/worker",
+      kind,
+    });
+    const lines: RolloutLine[] = [
+      { timestamp: "2026-06-03T13:00:00.000Z", type: "session_meta", payload: { id: "s" } },
+      event("2026-06-03T13:00:01.000Z", { type: "task_started", turn_id: "t" }),
+      event("2026-06-03T13:00:02.000Z", {
+        type: "item_completed",
+        item: activityItem("started", "thread-a"),
+      }),
+      event("2026-06-03T13:00:04.000Z", { type: "task_complete", turn_id: "t" }),
+    ];
+    const { turns } = parseSession(lines);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].subagentThreadIds).toEqual(["thread-a"]);
+  });
+
+  it("deduplicates subagent threads across legacy and completed activity events", () => {
+    const event = (ts: string, payload: Record<string, unknown>): RolloutLine => ({
+      timestamp: ts,
+      type: "event_msg",
+      payload: { ...payload },
+    });
+    const activityItem = (kind: string, agentThreadId: string) => ({
+      type: "SubAgentActivity",
+      event_id: `event-${kind}-${agentThreadId}`,
+      agent_thread_id: agentThreadId,
+      agent_path: "/root/worker",
+      kind,
+    });
+    const lines: RolloutLine[] = [
+      { timestamp: "2026-06-03T13:00:00.000Z", type: "session_meta", payload: { id: "s" } },
+      event("2026-06-03T13:00:01.000Z", { type: "task_started", turn_id: "t" }),
+      event("2026-06-03T13:00:02.000Z", {
+        type: "item_completed",
+        item: activityItem("started", "thread-a"),
+      }),
+      // The same spawn reported through legacy and current formats must nest once.
+      event("2026-06-03T13:00:02.100Z", {
+        type: "sub_agent_activity",
+        event_id: "legacy-activity",
+        agent_thread_id: "thread-a",
+        agent_path: "/root/worker",
+        kind: "started",
+      }),
+      event("2026-06-03T13:00:02.200Z", {
+        type: "collab_agent_spawn_end",
+        call_id: "legacy-spawn",
+        new_thread_id: "thread-a",
+      }),
+      event("2026-06-03T13:00:02.300Z", {
+        type: "item_completed",
+        item: activityItem("started", "thread-a"),
+      }),
+      // Later lifecycle items reference an existing child and must not register.
+      event("2026-06-03T13:00:03.000Z", {
+        type: "item_completed",
+        item: activityItem("interacted", "thread-b"),
+      }),
+      event("2026-06-03T13:00:03.100Z", {
+        type: "item_completed",
+        item: activityItem("completed", "thread-c"),
+      }),
+      event("2026-06-03T13:00:03.200Z", {
+        type: "item_completed",
+        item: activityItem("interrupted", "thread-d"),
+      }),
+      event("2026-06-03T13:00:04.000Z", { type: "task_complete", turn_id: "t" }),
+    ];
+    const { turns } = parseSession(lines);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].subagentThreadIds).toEqual(["thread-a"]);
+  });
+
   it("treats a trailing, never-completed turn as not completed", () => {
     const lines: RolloutLine[] = [
       { timestamp: "2026-06-03T12:00:00.000Z", type: "session_meta", payload: { id: "s" } },
