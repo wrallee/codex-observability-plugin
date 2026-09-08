@@ -1,6 +1,6 @@
 {
   "name": "tracing",
-  "version": "0.3.1-W001",
+  "version": "0.3.0-W002",
   "description": "Trace OpenAI Codex sessions to Langfuse.",
   "author": {
     "name": "Langfuse",

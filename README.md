@@ -19,7 +19,7 @@ Interrupted turns (where you cancel mid-response) are still uploaded and flagged
 ## Prerequisites
 
 - Node.js >= 22
-- The `npm` CLI on your `PATH`. Codex installs this plugin from the npm registry and shells out to `npm pack` to fetch it.
+- Git on your `PATH`. The marketplace includes the built hook; npm and dependency installation are not required.
 - Codex >= 0.128
 - A [Langfuse Cloud](https://cloud.langfuse.com) account (or a [self-hosted](https://langfuse.com/self-hosting) instance) and API keys
 
@@ -28,8 +28,11 @@ Interrupted turns (where you cancel mid-response) are still uploaded and flagged
 ### 1. Add the plugin marketplace
 
 ```bash
-codex plugin marketplace add langfuse/codex-observability-plugin
+codex plugin marketplace add wrallee/codex-observability-plugin
+codex plugin add tracing@codex-observability-plugin
 ```
+
+The marketplace uses `./plugins/tracing` from the fetched repository. No package under the upstream `@langfuse` npm scope is needed. If this marketplace name is already registered from upstream or a local directory, remove that registration with `codex plugin marketplace remove codex-observability-plugin` before adding the fork.
 
 ### 2. Enable the plugin
 
@@ -212,23 +215,20 @@ The hook fails open: any tracing error is logged and swallowed so it never block
 ```bash
 pnpm install
 pnpm test        # build, then run the test suite
-pnpm run lint    # prettier + tsc + build
+pnpm run lint    # prettier + tsc + bundle freshness check
 pnpm run build   # bundle the hook to plugins/tracing/dist/index.mjs
 ```
 
-The hook ships as a single self-contained `plugins/tracing/dist/index.mjs`, because Codex runs the plugin without an install step and never installs its dependencies. The bundle is a build output and is not committed: `prepack` builds it when the npm package is published, so it travels in the tarball instead of in Git. `pnpm test` builds first, since the hook-command test executes the bundled hook.
+The hook ships as a single self-contained `plugins/tracing/dist/index.mjs`, because Codex never installs its dependencies or builds the repository during installation. This fork commits the bundle alongside the source. After changing runtime code, run `pnpm run build` and include the updated bundle in the same commit. `pnpm run lint:dist` rebuilds and fails if the committed bundle was missing or stale.
 
 ### Releasing
 
-Releases go through the tag-triggered workflow, never through a manual `npm publish`. Bump the version in **both** `plugins/tracing/package.json` and `plugins/tracing/.codex-plugin/plugin.json`, then push a matching tag:
+1. Preserve the upstream base version (`0.3.0`) and increment only the fork suffix (`W001`, `W002`, etc.) in both `plugins/tracing/package.json` and `plugins/tracing/.codex-plugin/plugin.json`. For example, the next fork release after `0.3.0-W002` is `0.3.0-W003`. Change the base version only when adopting a corresponding upstream release. Codex uses the plugin manifest version as its cache key.
+2. Run `pnpm run build`, `pnpm run lint`, and `pnpm test`.
+3. Commit the source, manifests, and `plugins/tracing/dist/index.mjs`, then push to this fork's default branch (`main-custom`). The marketplace installs directly from that branch; there is no npm publish step.
+4. Optionally push a matching version tag, such as `v0.3.0-W002`. The release workflow validates versions and the bundle, runs tests, and creates a draft GitHub release.
 
-```bash
-git tag v0.4.0 && git push origin v0.4.0
-```
-
-The workflow refuses a tag whose name disagrees with either version, then lints, tests, and stages the package on npm with provenance. A maintainer approves the staged publish with 2FA (`npm stage approve <id>`), and the draft GitHub release still has to be published. Finally, point `.agents/plugins/marketplace.json` at the new version, because that pin is what users install.
-
-The two versions matter for different things: the one in `package.json` is the npm version, and the one in `plugin.json` decides the cache directory Codex installs into (`~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`) and therefore whether Codex refreshes an existing install at all. Publishing them out of step ships a package that reports the wrong version.
+Users can refresh the marketplace with `codex plugin marketplace upgrade codex-observability-plugin` and verify the installed version with `codex plugin list`. Changed hooks may require trust review again in `/hooks`.
 
 ## License
 

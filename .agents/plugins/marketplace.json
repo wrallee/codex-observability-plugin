@@ -7,9 +7,8 @@
     {
       "name": "tracing",
       "source": {
-        "source": "npm",
-        "package": "@langfuse/codex-observability-plugin",
-        "version": "0.3.1-W001"
+        "source": "local",
+        "path": "./plugins/tracing"
       },
       "policy": {
         "installation": "AVAILABLE",

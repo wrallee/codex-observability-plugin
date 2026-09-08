@@ -66,6 +66,31 @@ afterEach(() => {
 });
 
 describe("bundled Stop hook command", () => {
+  it("installs the marketplace plugin without npm or a dependency install", async () => {
+    const marketplace = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, ".agents/plugins/marketplace.json"), "utf-8"),
+    );
+    const plugin = marketplace.plugins.find((entry: { name: string }) => entry.name === "tracing");
+    expect(plugin.source.source).toBe("local");
+    const installedRoot = path.join(makeTempDir("lf-installed-"), "tracing");
+    fs.cpSync(path.resolve(repoRoot, plugin.source.path), installedRoot, {
+      recursive: true,
+      filter: (source) => !["node_modules", "src", "test"].includes(path.basename(source)),
+    });
+    const sessionCwd = makeTempDir("lf-session-");
+    const result = await runShellCommand(readHookCommand(), {
+      cwd: sessionCwd,
+      env: {
+        PATH: process.env.PATH,
+        PLUGIN_ROOT: installedRoot,
+        CODEX_HOME: sessionCwd,
+        TRACE_TO_LANGFUSE: "false",
+      },
+      input: "{}",
+    });
+    expect(result).toEqual({ code: 0, stdout: "", stderr: "" });
+  });
+
   it("runs from an arbitrary session cwd via PLUGIN_ROOT instead of a relative repo path", async () => {
     const codexHome = makeTempDir("lf-codex-home-");
     const sessionCwd = makeTempDir("lf-codex-cwd-");

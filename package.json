@@ -29,7 +29,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint:tsc": "tsc --noEmit",
-    "lint": "pnpm run format:check && pnpm run lint:tsc && pnpm run build"
+    "lint": "pnpm run format:check && pnpm run lint:tsc && pnpm run lint:dist",
+    "lint:dist": "node scripts/check-bundle.mjs"
   },
   "dependencies": {
     "@langfuse/otel": "^5.4.1",

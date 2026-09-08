@@ -8,5 +8,6 @@ node_modules/
 # Local debugging
 debug.log
 
-# Build output
-plugins/tracing/dist/
+# Keep the standalone hook in Git for marketplace installs.
+plugins/tracing/dist/*
+!plugins/tracing/dist/index.mjs
