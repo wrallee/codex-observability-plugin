@@ -329,7 +329,7 @@ function emitToolCall(
  */
 export async function convertRollout(
   rolloutFile: string,
-  options: { config: Config; parentObservation?: LangfuseObservation },
+  options: { config: Config; parentObservation?: LangfuseObservation; stopTurnId?: string },
 ): Promise<void> {
   const { sessionMeta, turns } = parseSession(await loadSession(rolloutFile));
   debugLog(`parsed ${turns.length} turn(s) from ${path.basename(rolloutFile)}`);
@@ -350,9 +350,14 @@ export async function convertRollout(
 
   for (let turnIndex = 0; turnIndex < turns.length; turnIndex++) {
     const turn = turns[turnIndex];
-    if (turn.completed && turn.turnId && uploaded.has(turn.turnId)) {
+    if (turn.turnId && uploaded.has(turn.turnId)) {
       continue; // already uploaded in a previous hook invocation
     }
+
+    // Stop can run before Codex persists task_complete. Only its matching
+    // turn is ready to publish; unrelated unfinished turns must wait.
+    const stopped = Boolean(turn.turnId && turn.turnId === options.stopTurnId);
+    if (!turn.completed && !stopped) continue;
 
     // Turn numbering stays 1-based over the full rollout (including turns
     // skipped by dedup above) so the derived id is stable across hook runs.
@@ -375,15 +380,11 @@ export async function convertRollout(
       },
     );
 
-    // Only mark completed turns as uploaded; an in-progress trailing turn is
-    // re-uploaded (and finalized) on the next hook invocation.
-    if (turn.completed && turn.turnId) {
+    // A matching Stop snapshot is final for this hook, even if the rollout
+    // completion marker has not been persisted yet.
+    if (turn.turnId) {
       uploaded.add(turn.turnId);
       await markTurnUploaded(rolloutFile, turn.turnId);
-    } else if (turn.turnId) {
-      debugLog(
-        `uploaded in-progress turn ${turn.turnId}; waiting for completion before sidecar mark`,
-      );
     }
   }
 }

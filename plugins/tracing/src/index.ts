@@ -46,7 +46,11 @@ export async function runHook(): Promise<void> {
 
   const instrumentation = setupInstrumentation(config);
   try {
-    await convertRollout(hookInput.transcript_path, { config });
+    await convertRollout(hookInput.transcript_path, {
+      config,
+      stopTurnId:
+        hookInput.hook_event_name === "Stop" ? (hookInput.turn_id ?? undefined) : undefined,
+    });
   } catch (error) {
     debugLog("failed to convert rollout:", error);
     if (config.fail_on_error) throw error;

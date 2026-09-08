@@ -117,6 +117,8 @@ export function parseSession(lines: RolloutLine[]): {
   let step: ModelStep | null = null;
   let toolCallsById = new Map<string, ToolCall>();
   let lastTimestamp = Date.now();
+  let sawSessionMeta = false;
+  let skippingCopiedParentHistory = false;
 
   function newStep(startTime: number): ModelStep {
     return { startTime, endTime: startTime, toolCalls: [] };
@@ -171,13 +173,34 @@ export function parseSession(lines: RolloutLine[]): {
         parent_thread_id?: string | null;
         thread_source?: string | null;
       };
-      sessionMeta = {
+      const nextSessionMeta: SessionMeta = {
         sessionId: typeof p.id === "string" ? p.id : sessionMeta.sessionId,
         cliVersion: p.cli_version,
         modelProvider: p.model_provider ?? undefined,
         baseInstructions: p.base_instructions?.text,
         isSubagentThread: typeof p.parent_thread_id === "string" || p.thread_source === "subagent",
       };
+
+      // Current Codex child rollouts begin with the child's session_meta, then
+      // embed the parent's session_meta and complete history before applying
+      // the child thread settings. Keep the first (child) identity and ignore
+      // that inherited prefix; otherwise parent turns are exported once from
+      // the parent file and again from every child file.
+      if (sawSessionMeta && sessionMeta.isSubagentThread) {
+        if (nextSessionMeta.sessionId !== sessionMeta.sessionId) {
+          skippingCopiedParentHistory = true;
+        }
+      } else {
+        sessionMeta = nextSessionMeta;
+        sawSessionMeta = true;
+      }
+      continue;
+    }
+
+    if (skippingCopiedParentHistory) {
+      if (line.type === "event_msg" && line.payload.type === "thread_settings_applied") {
+        skippingCopiedParentHistory = false;
+      }
       continue;
     }
 
@@ -300,18 +323,24 @@ export function parseSession(lines: RolloutLine[]): {
         continue;
       }
 
-      ensureTurn(ts);
-
       if (et === "user_message" && typeof p.message === "string") {
-        if (!turn!.userInput) turn!.userInput = p.message;
+        const t = ensureTurn(ts);
+        if (!t.userInput) t.userInput = p.message;
       } else if (et === "item_completed" && p.item?.type === "UserMessage") {
         // The structured item carries the bare prompt; the `response_item`
         // copy may be concatenated with injected context.
         const text = extractMessageText(p.item.content);
-        if (text && !turn!.userInput) turn!.userInput = text;
+        if (text) {
+          const t = ensureTurn(ts);
+          if (!t.userInput) t.userInput = text;
+        }
       } else if (et === "agent_message" && typeof p.message === "string") {
-        turn!.lastAgentMessage = p.message;
+        ensureTurn(ts).lastAgentMessage = p.message;
       } else if (et === "token_count") {
+        // Session settings, rate-limit updates, and other metadata outside an
+        // active turn must not synthesize an empty turn. Real content above
+        // still starts implicit turns for older rollouts without task_started.
+        if (!turn) continue;
         if (p.info?.total_token_usage) turn!.totalUsage = p.info.total_token_usage;
         closeStep(ts, p.info?.last_token_usage ?? undefined);
       } else if (et === "task_complete") {
@@ -322,6 +351,7 @@ export function parseSession(lines: RolloutLine[]): {
         // A subagent spawn records the child thread *and* (since it carries a
         // call_id ending in "_end") enriches the spawning tool call below.
         if (et === "collab_agent_spawn_end" && typeof p.new_thread_id === "string") {
+          ensureTurn(ts);
           recordSubagentThread(p.new_thread_id);
         }
         // Codex multi-agent v2 persists the spawn as sub_agent_activity
@@ -333,6 +363,7 @@ export function parseSession(lines: RolloutLine[]): {
           p.kind === "started" &&
           typeof p.agent_thread_id === "string"
         ) {
+          ensureTurn(ts);
           recordSubagentThread(p.agent_thread_id);
         }
         // MCP tool calls are function calls with a mangled name
@@ -352,6 +383,7 @@ export function parseSession(lines: RolloutLine[]): {
         // event can be recorded before the web_search_call response item, so
         // register the call here if it is not known yet.
         if (et === "web_search_end" && typeof p.call_id === "string") {
+          ensureTurn(ts);
           let tc = toolCallsById.get(p.call_id);
           if (!tc) {
             tc = { callId: p.call_id, name: "web_search", args: undefined, startTime: ts };

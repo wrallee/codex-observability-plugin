@@ -21,6 +21,85 @@ function loadFixture(name: string): RolloutLine[] {
 }
 
 describe("parseSession", () => {
+  it("does not turn session settings into a phantom turn before task_started", () => {
+    const settings: RolloutLine = {
+      timestamp: "2026-09-08T03:39:26.314Z",
+      type: "event_msg",
+      payload: { type: "thread_settings_applied" },
+    };
+    expect(parseSession([settings]).turns).toEqual([]);
+    const { turns } = parseSession([
+      settings,
+      {
+        timestamp: "2026-09-08T03:39:26.321Z",
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "real-turn" },
+      },
+    ]);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].turnId).toBe("real-turn");
+    expect(turns[0].startTime).toBe(Date.parse("2026-09-08T03:39:26.321Z"));
+  });
+
+  it("ignores metadata and orphan completion events between and after turns", () => {
+    const payloads = [
+      { type: "task_started", turn_id: "first" },
+      { type: "task_complete", turn_id: "first" },
+      { type: "thread_settings_applied" },
+      { type: "token_count", info: null },
+      { type: "task_complete", turn_id: "first" },
+      { type: "task_started", turn_id: "second" },
+      { type: "task_complete", turn_id: "second" },
+      { type: "thread_settings_applied" },
+      { type: "future_metadata_event" },
+    ];
+    const lines: RolloutLine[] = payloads.map((payload, i) => ({
+      timestamp: new Date(Date.parse("2026-09-08T03:39:26.000Z") + i).toISOString(),
+      type: "event_msg",
+      payload,
+    }));
+    expect(parseSession(lines).turns.map((turn) => turn.turnId)).toEqual(["first", "second"]);
+  });
+
+  it("preserves real content in legacy rollouts without task_started", () => {
+    const lines = loadFixture("rollout-basic-main.jsonl").filter(
+      (line) => !(line.type === "event_msg" && line.payload.type === "task_started"),
+    );
+    const { turns } = parseSession(lines);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].completed).toBe(true);
+    expect(turns[0].userInput).toBe("List the files in the repo");
+    expect(turns[0].finalOutput).toBe("There are two files: file1.txt and file2.txt.");
+    expect(turns[0].steps[0].toolCalls[0].output).toBe("file1.txt\nfile2.txt");
+  });
+
+  it.each([
+    { type: "user_message", message: "hello" },
+    { type: "agent_message", message: "hello" },
+    {
+      type: "item_completed",
+      item: { type: "UserMessage", content: [{ type: "input_text", text: "hello" }] },
+    },
+    { type: "web_search_end", call_id: "search", query: "hello" },
+    { type: "collab_agent_spawn_end", new_thread_id: "child" },
+    { type: "sub_agent_activity", kind: "started", agent_thread_id: "child" },
+  ])("preserves implicit legacy turns from $type", (payload) => {
+    const { turns } = parseSession([
+      { timestamp: "2026-09-08T03:39:26.321Z", type: "event_msg", payload },
+    ]);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].completed).toBe(false);
+    if (payload.type === "web_search_end") {
+      expect(turns[0].steps[0].toolCalls[0].name).toBe("web_search");
+    } else if (payload.type === "agent_message") {
+      expect(turns[0].finalOutput).toBe("hello");
+    } else if (payload.type === "user_message" || payload.type === "item_completed") {
+      expect(turns[0].userInput).toBe("hello");
+    } else {
+      expect(turns[0].subagentThreadIds).toEqual(["child"]);
+    }
+  });
+
   it("reconstructs a basic single-turn session with a tool call", () => {
     const { sessionMeta, turns } = parseSession(loadFixture("rollout-basic-main.jsonl"));
 
@@ -77,6 +156,26 @@ describe("parseSession", () => {
     expect(failing?.error).toBe("command failed");
     expect(turn.startTime).toBe(Date.parse("2026-06-03T11:00:01.000Z"));
     expect(turn.endTime).toBe(Date.parse("2026-06-03T11:00:05.000Z"));
+  });
+
+  it("skips copied parent history at the start of a child rollout", () => {
+    const { sessionMeta, turns } = parseSession(loadFixture("rollout-child-thread-child.jsonl"));
+
+    expect(sessionMeta).toMatchObject({
+      sessionId: "thread-child",
+      isSubagentThread: true,
+    });
+    expect(turns).toHaveLength(1);
+    expect(turns[0].turnId).toBe("turn-child");
+    expect(turns[0].userInput).toBe("tell a joke");
+    expect(turns[0].finalOutput).toContain("commitment issues");
+  });
+
+  it("preserves child turns after repeated metadata for the same child", () => {
+    const lines = loadFixture("rollout-child-thread-act.jsonl");
+    const expected = parseSession(lines);
+    expect(expected.turns.length).toBeGreaterThan(0);
+    expect(parseSession([lines[0], ...lines])).toEqual(expected);
   });
 
   it("records subagent threads from sub_agent_activity, ignoring non-started kinds", () => {

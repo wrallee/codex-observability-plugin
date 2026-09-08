@@ -68,6 +68,37 @@ beforeEach(() => {
 });
 
 describe("convertRollout", () => {
+  it("does not emit a trace for session metadata events without a turn", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lf-codex-trace-"));
+    const file = path.join(dir, "rollout-settings-only.jsonl");
+    fs.writeFileSync(
+      file,
+      [
+        {
+          timestamp: "2026-09-08T03:39:26.314Z",
+          type: "session_meta",
+          payload: {
+            id: "01a07f03-d9fa-7ce1-a0fc-74b152d2728c",
+            cli_version: "0.153.4",
+            model_provider: "openai",
+          },
+        },
+        {
+          timestamp: "2026-09-08T03:39:26.314Z",
+          type: "event_msg",
+          payload: { type: "thread_settings_applied" },
+        },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n") + "\n",
+    );
+
+    await convertRollout(file, { config: baseConfig });
+
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+    expect(fs.existsSync(`${file}.langfuse`)).toBe(false);
+  });
+
   it("emits an agent → generation → tool tree with backdated timestamps", async () => {
     const dir = stageFixtures();
     await convertRollout(path.join(dir, "rollout-basic-main.jsonl"), { config: baseConfig });
@@ -135,6 +166,7 @@ describe("convertRollout", () => {
     const child = spans.find((s) => s.name === "Codex Subagent Turn" && obsType(s) === "agent");
     expect(parent).toBeDefined();
     expect(child).toBeDefined();
+    expect(spans.filter((s) => obsType(s) === "agent")).toHaveLength(2);
     expect(parentId(parent!)).toBeUndefined();
     expect(parentId(child!)).toBeDefined();
 
@@ -157,6 +189,20 @@ describe("convertRollout", () => {
     );
     expect(failedTool, "expected a failed tool span").toBeDefined();
     expect(attr(failedTool!, "langfuse.observation.status_message")).toContain("command failed");
+  });
+
+  it("exports only the child turn when a child rollout is converted directly", async () => {
+    const dir = stageFixtures();
+    await convertRollout(path.join(dir, "rollout-child-thread-child.jsonl"), {
+      config: baseConfig,
+    });
+
+    const roots = exporter.getFinishedSpans().filter((span) => obsType(span) === "agent");
+    expect(roots).toHaveLength(1);
+    expect(roots[0].name).toBe("Codex Subagent Turn");
+    expect(attr(roots[0], "langfuse.observation.metadata.codex.thread_id")).toBe("thread-child");
+    expect(attr(roots[0], "langfuse.observation.input")).toContain("tell a joke");
+    expect(attr(roots[0], "langfuse.observation.input")).not.toContain("copied parent prompt");
   });
 
   it("nests subagent turns discovered via sub_agent_activity events", async () => {
@@ -200,6 +246,67 @@ describe("convertRollout", () => {
 
     const shell = spans.find((s) => s.name === "local_shell")!;
     expect(attr(shell, "langfuse.observation.output")).toContain("clean");
+  });
+
+  it("records a Stop turn before task_complete and does not re-emit it", async () => {
+    const dir = stageFixtures();
+    const file = path.join(dir, "rollout-basic-main.jsonl");
+    const complete = fs.readFileSync(file, "utf8");
+    const pending =
+      complete
+        .trim()
+        .split("\n")
+        .filter((line) => JSON.parse(line).payload.type !== "task_complete")
+        .join("\n") + "\n";
+    fs.writeFileSync(file, pending);
+    await convertRollout(file, { config: baseConfig, stopTurnId: "turn-1" });
+    expect(exporter.getFinishedSpans().filter((s) => s.name === "Codex Turn")).toHaveLength(1);
+    expect(fs.readFileSync(`${file}.langfuse`, "utf8").trim()).toBe("turn-1");
+    exporter.reset();
+    await convertRollout(file, { config: baseConfig, stopTurnId: "turn-1" });
+    fs.writeFileSync(file, complete);
+    await convertRollout(file, { config: baseConfig });
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
+  });
+
+  it.each([undefined, "another-turn"])(
+    "defers an unfinished turn without a matching Stop id (%s)",
+    async (stopTurnId) => {
+      const dir = stageFixtures();
+      const file = path.join(dir, "rollout-basic-main.jsonl");
+      const complete = fs.readFileSync(file, "utf8");
+      fs.writeFileSync(
+        file,
+        complete
+          .trim()
+          .split("\n")
+          .filter((line) => JSON.parse(line).payload.type !== "task_complete")
+          .join("\n") + "\n",
+      );
+      await convertRollout(file, { config: baseConfig, stopTurnId });
+      expect(exporter.getFinishedSpans()).toHaveLength(0);
+      expect(fs.existsSync(`${file}.langfuse`)).toBe(false);
+      fs.writeFileSync(file, complete);
+      await convertRollout(file, { config: baseConfig });
+      expect(exporter.getFinishedSpans().filter((s) => s.name === "Codex Turn")).toHaveLength(1);
+    },
+  );
+
+  it("never exports settings-only traces across repeated hooks", async () => {
+    const dir = stageFixtures();
+    const file = path.join(dir, "rollout-basic-main.jsonl");
+    const complete = fs.readFileSync(file, "utf8");
+    const settings = JSON.stringify({
+      timestamp: "2026-06-03T10:00:00.000Z",
+      type: "event_msg",
+      payload: { type: "thread_settings_applied" },
+    });
+    fs.writeFileSync(file, `${settings}\n${complete}${settings}\n`);
+    await convertRollout(file, { config: baseConfig });
+    expect(exporter.getFinishedSpans().filter((s) => s.name === "Codex Turn")).toHaveLength(1);
+    exporter.reset();
+    await convertRollout(file, { config: baseConfig });
+    expect(exporter.getFinishedSpans()).toHaveLength(0);
   });
 
   it("skips turns already recorded in the sidecar (dedup)", async () => {

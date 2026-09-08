@@ -1,7 +1,7 @@
 {
   "name": "codex-observability-plugin",
   "interface": {
-    "displayName": "Langfuse"
+    "displayName": "Langfuse W"
   },
   "plugins": [
     {
@@ -9,7 +9,7 @@
       "source": {
         "source": "npm",
         "package": "@langfuse/codex-observability-plugin",
-        "version": "0.3.0"
+        "version": "0.3.1-W001"
       },
       "policy": {
         "installation": "AVAILABLE",

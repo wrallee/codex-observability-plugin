@@ -6,8 +6,8 @@ import * as fs from "node:fs/promises";
  * The `Stop` hook fires after every Codex turn and re-reads the whole rollout
  * file, so completed turns would be re-uploaded each time. We record uploaded
  * turn ids in a sidecar file (`<rolloutFile>.langfuse`) and skip them on
- * subsequent invocations. In-progress (not-yet-completed) turns are uploaded
- * but intentionally not recorded, so they finalize on the next hook run.
+ * subsequent invocations. A matching Stop hook also finalizes its turn before
+ * task_complete is persisted. Other unfinished turns are deferred.
  */
 export async function loadUploadedTurnIds(rolloutFile: string): Promise<Set<string>> {
   try {
